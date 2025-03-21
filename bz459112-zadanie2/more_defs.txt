@@ -1,0 +1,1 @@
+main = six S Z
