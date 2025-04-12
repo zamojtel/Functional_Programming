@@ -1,0 +1,2 @@
+s x y z = x z (y z)
+main a = s k k x

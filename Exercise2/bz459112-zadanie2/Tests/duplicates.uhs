@@ -1,0 +1,6 @@
+s x y z = x z (y z)
+d a b c = a
+k a c = c a 
+w m l e = l e
+k x y = x
+main = s k k t
