@@ -1,0 +1,5 @@
+one = S Z
+two = S one
+add Z n = n
+add (S m) n = S (add m n)
+main = add two two
