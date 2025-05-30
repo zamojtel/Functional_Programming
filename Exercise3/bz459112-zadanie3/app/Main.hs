@@ -5,6 +5,8 @@ import Language.Haskell.Syntax
 import Language.Haskell.Parser
 import Data.List (intercalate,find)
 import Data.Maybe (Maybe(Nothing))
+import Data.Map (Map)
+import qualified Data.Map as M
 
 
 -- Types 
@@ -64,9 +66,10 @@ fromHsExpr p = error $ "Unexpected expression: "++show p
 parseStr :: String -> IO ()
 parseStr str = do
     let prog = fromHsString str
+    let defMap = buildDefMap prog
     mapM_ (putStrLn . prettyDef) (progDefs prog)  
     putStrLn "---------------------------------"
-    printPath prog (Var "main")
+    printPath defMap (Var "main")
 
 prettyExpr :: Expr -> String
 prettyExpr (Var name) = name 
@@ -142,18 +145,6 @@ substList :: [(Name,Expr)] -> Expr -> Expr
 substList [] expr = expr
 substList (x:xs) expr = substList xs (subst x expr)
 
--- data Match = Match
---     { matchName :: Name
---     , matchPats :: [Pat]
---     , matchRhs  ::Expr
---     } deriving (Show)
-
--- data Expr
---     = Var Name
---     | Con Name
---     | Expr :$ Expr deriving (Show)
--- data Pat = PVar Name | PApp Name [Pat] deriving (Show)
-
 renameMatch::Match -> Match
 renameMatch (Match name pats rhs) = Match name (map renamePat pats) (renameExpr rhs) 
     where 
@@ -167,7 +158,7 @@ renameMatch (Match name pats rhs) = Match name (map renamePat pats) (renameExpr 
         vars::[ String ]
         vars = concatMap patVars pats
 
-fitPat::Prog -> Pat -> Expr -> (Expr,Maybe [(Name,Expr)])
+fitPat::DefMap -> Pat -> Expr -> (Expr,Maybe [(Name,Expr)])
 fitPat prog (PVar name) e = (e,Just [(name,e)])
 -- fitPat prog _ _ = error "Patterns are not supported" 
 fitPat prog p@(PApp name pats) e  = case toList e of
@@ -192,7 +183,7 @@ fitPat prog p@(PApp name pats) e  = case toList e of
 
 
 -- List of patterns is the same length as the list of expressions
-fitPats::Prog -> [Pat] -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
+fitPats::DefMap -> [Pat] -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
 fitPats prog [] [] = ([],Just [])
 fitPats prog (p:ps) (e:es) = 
     case fitPat prog p e of 
@@ -202,10 +193,10 @@ fitPats prog (p:ps) (e:es) =
             (es2,Just ctx2) -> (e1:es2,Just (ctx1++ctx2))
 fitPats _ _ _ = error "Number of patterns differ from the number of expressions"
 
-fitMatch::Prog -> Match -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
+fitMatch::DefMap -> Match -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
 fitMatch prog m es = fitPats prog (matchPats m) es
 
-findMatch::Prog -> [Match] -> [Expr] -> Maybe (Match,[(Name,Expr)])
+findMatch::DefMap -> [Match] -> [Expr] -> Maybe (Match,[(Name,Expr)])
 findMatch prog [] es = Nothing
 findMatch prog (m:ms) es = 
     if length (matchPats m) == length es
@@ -219,12 +210,14 @@ findMatch prog (m:ms) es =
 renameCtx::[(Name,Expr)] -> [(Name,Expr)]
 renameCtx ctx = map (\(s,e) -> ((addPrefix s),e)) ctx 
 
-outerStep:: Prog -> Expr -> Maybe Expr
+-- outerStep:: Prog -> Expr -> Maybe Expr
+outerStep:: DefMap -> Expr -> Maybe Expr
 outerStep prog e = case toList e of
     ((Con _) : _ ) -> Nothing
     ((Var name) : es ) -> 
-        let allDefs = progDefs prog
-            def = find (any((name == ) .matchName).defMatches) allDefs 
+            -- let allDefs = progDefs prog
+            -- def = find (any((name == ) .matchName).defMatches) allDefs 
+        let def = M.lookup name prog
         in case def of 
             Nothing -> Nothing
             (Just d) -> case findMatch prog (defMatches d) es of
@@ -235,7 +228,7 @@ outerStep prog e = case toList e of
                     in Just $ substList ctx2 (matchRhs m2)
 
 
-rstep::Prog -> Expr -> Maybe Expr
+rstep::DefMap -> Expr -> Maybe Expr
 rstep prog e = case outerStep prog e of
     (Just e2) -> Just e2
     (Nothing) -> case e of 
@@ -246,13 +239,13 @@ rstep prog e = case outerStep prog e of
                 (Nothing) -> Nothing
         _ -> Nothing
 
-rpath:: Prog -> Expr -> [Expr]
+rpath:: DefMap -> Expr -> [Expr]
 rpath prog e = e : case rstep prog e of
     (Just e2) -> rpath prog e2
     (Nothing) -> []
 
 
-printPath:: Prog -> Expr ->  IO()
+printPath:: DefMap -> Expr ->  IO()
 printPath prog expr = mapM_ (putStrLn.prettyExpr) $ take 30 $ rpath prog expr
 
 addPrefix::String -> String
@@ -266,6 +259,11 @@ patVars (PApp name pats) =  concatMap patVars pats
 renamePat::Pat -> Pat
 renamePat (PVar name) =  PVar (addPrefix name)
 renamePat (PApp name pats) = PApp name (map renamePat pats)
+
+-- DEFMAP
+type DefMap = Map Name Def
+buildDefMap :: Prog -> DefMap
+buildDefMap (Prog defList) = M.fromList (map ( \d -> (matchName $ head $ defMatches d,d)) defList)
 
 
 main :: IO ()
