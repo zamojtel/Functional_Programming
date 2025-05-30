@@ -1,0 +1,3 @@
+f a b = b
+-- main should reduce to a
+main = f x a

@@ -4,7 +4,7 @@ import System.Environment (getArgs)
 import Language.Haskell.Syntax
 import Language.Haskell.Parser
 import Data.List (intercalate,find)
-import Data.Maybe (Maybe(Nothing))
+import Data.Maybe (fromMaybe)
 import Data.Map (Map)
 import qualified Data.Map as M
 
@@ -133,30 +133,40 @@ prettyPat (PApp name pats) = "(" ++ concatSpace (name : map prettyPat pats) ++ "
 testExpr:: IO ()
 testExpr = putStrLn $ prettyExpr (Con "S" :$ ((Var "add" :$ Var "m") :$ Var "n"))
 
-subst :: (Name, Expr) -> Expr -> Expr
-subst (name,expr) c@(Con _) = c 
-subst (name,expr) v@(Var var_name)  =
-    if name == var_name 
-        then expr
-        else v
-subst p (expr1 :$ expr2) = subst p expr1 :$ subst p expr2
+-- subst :: (Name, Expr) -> Expr -> Expr
+-- subst (name,expr) c@(Con _) = c 
+-- subst (name,expr) v@(Var var_name)  =
+--     if name == var_name 
+--         then expr
+--         else v
+-- subst p (expr1 :$ expr2) = subst p expr1 :$ subst p expr2
 
-substList :: [(Name,Expr)] -> Expr -> Expr 
-substList [] expr = expr
-substList (x:xs) expr = substList xs (subst x expr)
+-- substList :: [(Name,Expr)] -> Expr -> Expr 
+-- substList [] expr = expr
+-- substList (x:xs) expr = substList xs (subst x expr)
 
-renameMatch::Match -> Match
-renameMatch (Match name pats rhs) = Match name (map renamePat pats) (renameExpr rhs) 
-    where 
-        renameExpr:: Expr -> Expr
-        renameExpr v@(Var name) =  
-            if name `elem` vars
-                then Var (addPrefix name)
-                else v
-        renameExpr c@(Con name) = c
-        renameExpr (e1 :$ e2) = renameExpr e1 :$ renameExpr e2
-        vars::[ String ]
-        vars = concatMap patVars pats
+
+-- Przykładowa funkcja do podstawienia zmiennych (do uzupełnienia)
+type Subst = [(Name, Expr)]
+
+substList :: Subst -> Expr -> Expr
+substList sub e@(Var x) = fromMaybe e (lookup x sub)
+substList sub e@(Con c) = e
+substList sub (a :$ b) = substList sub a :$ substList sub b
+
+
+-- renameMatch::Match -> Match
+-- renameMatch (Match name pats rhs) = Match name (map renamePat pats) (renameExpr rhs) 
+--     where 
+--         renameExpr:: Expr -> Expr
+--         renameExpr v@(Var name) =  
+--             if name `elem` vars
+--                 then Var (addPrefix name)
+--                 else v
+--         renameExpr c@(Con name) = c
+--         renameExpr (e1 :$ e2) = renameExpr e1 :$ renameExpr e2
+--         vars::[ String ]
+--         vars = concatMap patVars pats
 
 fitPat::DefMap -> Pat -> Expr -> (Expr,Maybe [(Name,Expr)])
 fitPat prog (PVar name) e = (e,Just [(name,e)])
@@ -207,8 +217,8 @@ findMatch prog (m:ms) es =
         else
             Nothing
 
-renameCtx::[(Name,Expr)] -> [(Name,Expr)]
-renameCtx ctx = map (\(s,e) -> ((addPrefix s),e)) ctx 
+-- renameCtx::[(Name,Expr)] -> [(Name,Expr)]
+-- renameCtx ctx = map (\(s,e) -> ((addPrefix s),e)) ctx 
 
 -- outerStep:: Prog -> Expr -> Maybe Expr
 outerStep:: DefMap -> Expr -> Maybe Expr
@@ -223,9 +233,10 @@ outerStep prog e = case toList e of
             (Just d) -> case findMatch prog (defMatches d) es of
                 Nothing -> Nothing
                 (Just (m,ctx)) -> 
-                    let m2 = renameMatch m 
-                        ctx2 = renameCtx ctx
-                    in Just $ substList ctx2 (matchRhs m2)
+                    -- let m2 = renameMatch m 
+                    --     ctx2 = renameCtx ctx
+                    -- in 
+                    Just $ substList ctx (matchRhs m)
 
 
 rstep::DefMap -> Expr -> Maybe Expr
@@ -248,23 +259,22 @@ rpath prog e = e : case rstep prog e of
 printPath:: DefMap -> Expr ->  IO()
 printPath prog expr = mapM_ (putStrLn.prettyExpr) $ take 30 $ rpath prog expr
 
-addPrefix::String -> String
-addPrefix s = "#"++s
+-- addPrefix::String -> String
+-- addPrefix s = "#"++s
 
-patVars::Pat -> [String]
-patVars (PVar name) = [name]
-patVars (PApp name pats) =  concatMap patVars pats
+-- patVars::Pat -> [String]
+-- patVars (PVar name) = [name]
+-- patVars (PApp name pats) =  concatMap patVars pats
 
 
-renamePat::Pat -> Pat
-renamePat (PVar name) =  PVar (addPrefix name)
-renamePat (PApp name pats) = PApp name (map renamePat pats)
+-- renamePat::Pat -> Pat
+-- renamePat (PVar name) =  PVar (addPrefix name)
+-- renamePat (PApp name pats) = PApp name (map renamePat pats)
 
 -- DEFMAP
 type DefMap = Map Name Def
 buildDefMap :: Prog -> DefMap
 buildDefMap (Prog defList) = M.fromList (map ( \d -> (matchName $ head $ defMatches d,d)) defList)
-
 
 main :: IO ()
 main = do 
