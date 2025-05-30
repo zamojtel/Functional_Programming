@@ -1,0 +1,6 @@
+one = S Z
+two = S one
+test Z n = n
+test (S (S foo)) n = hello foo
+test (S m) n = k
+main = test (S (S (S Z))) j

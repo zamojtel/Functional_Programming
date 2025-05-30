@@ -3,4 +3,5 @@ k x y = x
 i = s k k
 om x = x x
 omega = om om
-main = k i omega 0
+-- main = k i omega 0
+main = k i omega Z
