@@ -1,15 +1,14 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Use second" #-}
+-- {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+-- {-# HLINT ignore "Use second" #-}
 module Main where
 
 import System.Environment (getArgs)
 import Language.Haskell.Syntax
 import Language.Haskell.Parser
-import Data.List (intercalate,find)
-import Data.Maybe (fromMaybe, Maybe (Nothing))
+import Data.List (intercalate)
+import Data.Maybe (fromMaybe)
 import Data.Map (Map)
 import qualified Data.Map as M
-
 
 -- Types 
 
@@ -54,9 +53,11 @@ fromHsDecl::HsDecl -> Def
 fromHsDecl (HsFunBind []) = error "Empty Declaration"
 fromHsDecl (HsFunBind hsMatches) = Def (map fromHsMatch hsMatches)
 fromHsDecl (HsPatBind _srcLoc (HsPVar (HsIdent identName)) (HsUnGuardedRhs hsExp) []) = Def [ Match identName [] (fromHsExpr hsExp) ]
+fromHsDecl x = error $ "Unexpected HsDecl" ++ show x
 
 fromHsMatch::HsMatch -> Match
 fromHsMatch (HsMatch _srcLoc (HsIdent identName) hsPats (HsUnGuardedRhs hsExp) []) = Match identName (map fromHsPat hsPats) (fromHsExpr hsExp)
+fromHsMatch x = error $ "Unexpected HsMatch" ++ show x
 
 fromHsPat:: HsPat -> Pat
 fromHsPat (HsPParen hsPat) = fromHsPat hsPat
@@ -82,12 +83,27 @@ parseStr str = do
 prettyExpr :: Expr -> String
 prettyExpr (Var name) = name 
 prettyExpr (Con conName) = conName 
-prettyExpr e = concatSpace (map f (toList e))
+-- prettyExpr e = concatSpace (map f (toList e))
+prettyExpr (a :$ b) = prettyExpr a ++ " "++ f b
     where
         f :: Expr -> String 
         f expr = if simple expr 
             then prettyExpr expr
             else "("++ prettyExpr expr ++ ")"
+
+prettyExprWithPath :: Expr -> Path -> String
+prettyExprWithPath (Con s) _ =  "{"++ s ++ "}"
+prettyExprWithPath (Var v) _ = "{"++ v ++ "}"
+prettyExprWithPath e [] = "{"++prettyExpr e ++ "}"
+prettyExprWithPath (a :$ b) (L:ps) = prettyExprWithPath a ps ++ " " ++ if simple b
+            then prettyExpr b
+            else "("++ prettyExpr b ++ ")" 
+prettyExprWithPath (a :$ b) (R:ps) = prettyExpr a ++ " " ++ if simple b 
+    then prettyExprWithPath b ps
+    else
+        if null ps
+            then prettyExprWithPath b ps 
+            else "(" ++ prettyExprWithPath b ps ++ ")"
 
 toList :: Expr -> [Expr]
 toList e = aux e [] 
@@ -101,17 +117,22 @@ toListWithPath e = aux e [] []
     where
         aux :: Expr -> [(Expr,Path)] -> Path -> [(Expr,Path)]
         aux (a :$ b) acc currentPath = aux a ((b,R:currentPath):acc) (L:currentPath)
-        aux c acc currentPath = map (\(e,path) -> (e,reverse path)) $ (c,currentPath):acc 
+        aux c acc currentPath = map (\(expr,path) -> (expr,reverse path)) $ (c,currentPath):acc 
 
-test_case_1 = toListWithPath (Con "A" :$ Var "arg1" :$ Var "arg2")
+-- test_case_1 = toListWithPath (Con "A" :$ Var "arg1" :$ Var "arg2")
+-- test_case_expr_1 = Con "A" :$ Var "arg1" :$ Var "arg2"
+-- test_case_expr_2 = Con "A" :$ Var "arg1" :$ (Con "S" :$ Con "Z") 
 
 fromList :: [Expr] -> Expr
 fromList [] = error "Empty list"
 fromList (x:xs) = go x xs 
     where
         go :: Expr -> [Expr] -> Expr
-        go x [] = x
-        go x (y:ys) = go (x :$ y) ys
+        go a [] = a 
+        go a (y:ys) = go (a :$ y) ys
+        -- go :: Expr -> [Expr] -> Expr
+        -- go x [] = x
+        -- go x (y:ys) = go (x :$ y) ys
 
 concatSpace :: [String] -> String
 concatSpace [] = ""
@@ -143,19 +164,20 @@ type Subst = [(Name, Expr)]
 
 substList :: Subst -> Expr -> Expr
 substList sub e@(Var x) = fromMaybe e (lookup x sub)
-substList sub e@(Con c) = e
+-- substList sub e@(Con c) = e
+substList _sub e@(Con _) = e
 substList sub (a :$ b) = substList sub a :$ substList sub b
 
 fitPat::Pat -> Expr -> Either (Maybe Path) Subst
 fitPat (PVar name) e = Right [(name,e)]
-fitPat p@(PApp name pats) e  = case toListWithPath e of
+-- fitPat p@(PApp name pats) e  = case toListWithPath e of
+fitPat (PApp name pats) e  = case toListWithPath e of
     ((Con s,_) : es ) -> 
         if name == s && length es == length pats 
             then fitPats pats es 
             else Left Nothing
     ((Var _,_) : _ ) -> Left (Just [])
     (_) -> error "Unexpected Expression"
-
 
 -- List of patterns is the same length as the list of expressions
 fitPats::[Pat] -> [(Expr,Path)] -> Either (Maybe Path) Subst
@@ -175,7 +197,8 @@ fitMatch::Match -> [(Expr,Path)] -> Either (Maybe Path) Subst
 fitMatch m es = fitPats (matchPats m) es
 
 findMatch:: [Match] -> [(Expr,Path)] -> Either (Maybe Path) (Match,Subst)
-findMatch [] es = Left Nothing -- brak matchy
+-- findMatch [] es = Left Nothing -- brak matchy
+findMatch [] _ = Left Nothing -- brak matchy
 findMatch (m:ms) es =  
     if length (matchPats m) == length es
         then 
@@ -185,7 +208,6 @@ findMatch (m:ms) es =
                 (Right subst) -> Right (m,subst)
         else
             Left Nothing
-
 
 outerStep:: DefMap -> Expr -> Either (Maybe Path) Expr
 outerStep prog e = case toListWithPath e of
@@ -198,41 +220,43 @@ outerStep prog e = case toListWithPath e of
                 (Left Nothing) -> Left Nothing
                 (Left (Just path)) -> Left (Just path)
                 (Right (m,subst)) -> Right $ substList subst (matchRhs m)
+    _-> error "Unexpected expression list"
 
-rstep::DefMap -> Expr -> Either (Maybe Path) Expr
+rstep::DefMap -> Expr -> Either (Maybe Path) (Expr,Path)
 rstep prog e = case outerStep prog e of
-    (Right e2) -> Right e2
+    (Right e2) -> Right (e2,[])
     (Left (Just path)) -> Left (Just path)
     (Left Nothing) -> case e of 
         (a :$ b) -> case rstep prog a of
-            (Right a2) -> Right (a2 :$ b)
+            (Right (a2,path)) -> Right (a2 :$ b,L:path)
             (Left (Just path)) -> Left (Just (L:path))
             (Left Nothing) -> case rstep prog b of 
-                (Right b2) -> Right (a :$ b2)
+                (Right (b2,path)) -> Right (a :$ b2,R:path)
                 (Left (Just path2)) -> Left (Just (R:path2))
                 (Left Nothing) -> Left Nothing
         _ -> Left Nothing
 
-rstepAt:: DefMap -> Expr -> Path -> Either (Maybe Path) Expr
+rstepAt:: DefMap -> Expr -> Path -> Either (Maybe Path) (Expr,Path)
 rstepAt prog e [] = rstep prog e
 rstepAt prog (a :$ b) (L:ps) = case rstepAt prog a ps of 
     (Left Nothing) -> Left Nothing
     (Left (Just path)) -> Left (Just (L:path))
-    (Right expr) -> Right (expr :$ b)
+    (Right (expr,path)) -> Right (expr :$ b,L:path)
 rstepAt prog (a :$ b) (R:ps) = case rstepAt prog b ps of 
     (Left Nothing) -> Left Nothing
     (Left (Just path)) -> Left (Just (R:path))
-    (Right expr) -> Right (a :$ expr)
+    (Right (expr,path)) -> Right (a :$ expr,R:path)
 rstepAt _ expr path = error $ "rstepAt "++prettyExpr expr ++ " with path "++ show path
 
 rpath:: DefMap -> Expr -> Path -> [(Expr,Path)]
 rpath prog e path = case rstepAt prog e path of
-    (Right expr) -> (expr,[]):rpath prog expr []
+    (Right (expr,path2)) -> (expr,path2):rpath prog expr []
     (Left Nothing) -> []
     (Left (Just p)) -> rpath prog e p 
 
 printPath:: DefMap -> Expr ->  IO()
-printPath prog expr = mapM_ (putStrLn.prettyExpr.fst) $ take 30 $ rpath prog expr []
+-- printPath prog expr = mapM_ (\(e,path) -> putStrLn $ prettyExprWithPath e path) $ take 30 $ rpath prog expr []
+printPath prog expr = mapM_ (\(e,path) -> putStrLn $ prettyExprWithPath e path) $ take 30 $ (expr,[]): rpath prog expr []
 
 -- DEFMAP
 type DefMap = Map Name Def
