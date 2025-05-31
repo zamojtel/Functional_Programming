@@ -102,11 +102,8 @@ toListWithPath e = aux e [] []
         aux :: Expr -> [(Expr,Path)] -> Path -> [(Expr,Path)]
         aux (a :$ b) acc currentPath = aux a ((b,R:currentPath):acc) (L:currentPath)
         aux c acc currentPath = map (\(e,path) -> (e,reverse path)) $ (c,currentPath):acc 
-        -- aux (a :$ b) acc currentPath = aux a ((b,currentPath++[R]):acc) (currentPath++[L])
-        -- aux c acc currentPath = (c,currentPath):acc 
 
 test_case_1 = toListWithPath (Con "A" :$ Var "arg1" :$ Var "arg2")
--- test_case_1 = toListWithPath (Con "A" :$ Var "arg1" :$ Var "arg2")
 
 fromList :: [Expr] -> Expr
 fromList [] = error "Empty list"
@@ -115,8 +112,6 @@ fromList (x:xs) = go x xs
         go :: Expr -> [Expr] -> Expr
         go x [] = x
         go x (y:ys) = go (x :$ y) ys
-        -- Example
-        -- (((e1 :$ e2) :$ e3) :$ e4) 
 
 concatSpace :: [String] -> String
 concatSpace [] = ""
@@ -127,22 +122,12 @@ simple :: Expr -> Bool
 simple (_ :$ _) = False
 simple _ = True
 
--- data Def = Def { defMatches :: [Match] } deriving (Show)
--- data Match = Match
---     { matchName :: Name
---     , matchPats :: [Pat]
---     , matchRhs  ::Expr
---     } deriving (Show)
-
-
 prettyDef::Def -> String
 prettyDef (Def xs) = intercalate "\n" (map prettyMatch xs)
 
 prettyMatch::Match -> String
 prettyMatch (Match name [] rhs) = name ++" = " ++ prettyExpr rhs
 prettyMatch (Match name pats rhs) = name ++" "++concatSpace (map prettyPat pats)++" = "++prettyExpr rhs
-
--- data Pat = PVar Name | PApp Name [Pat] deriving (Show)
 
 prettyPat:: Pat -> String
 prettyPat (PVar name) = name
@@ -153,19 +138,6 @@ prettyPat (PApp name pats) = "(" ++ concatSpace (name : map prettyPat pats) ++ "
 testExpr:: IO ()
 testExpr = putStrLn $ prettyExpr (Con "S" :$ ((Var "add" :$ Var "m") :$ Var "n"))
 
--- subst :: (Name, Expr) -> Expr -> Expr
--- subst (name,expr) c@(Con _) = c 
--- subst (name,expr) v@(Var var_name)  =
---     if name == var_name 
---         then expr
---         else v
--- subst p (expr1 :$ expr2) = subst p expr1 :$ subst p expr2
-
--- substList :: [(Name,Expr)] -> Expr -> Expr 
--- substList [] expr = expr
--- substList (x:xs) expr = substList xs (subst x expr)
-
-
 -- Przykładowa funkcja do podstawienia zmiennych (do uzupełnienia)
 type Subst = [(Name, Expr)]
 
@@ -174,27 +146,6 @@ substList sub e@(Var x) = fromMaybe e (lookup x sub)
 substList sub e@(Con c) = e
 substList sub (a :$ b) = substList sub a :$ substList sub b
 
-
--- renameMatch::Match -> Match
--- renameMatch (Match name pats rhs) = Match name (map renamePat pats) (renameExpr rhs) 
---     where 
---         renameExpr:: Expr -> Expr
---         renameExpr v@(Var name) =  
---             if name `elem` vars
---                 then Var (addPrefix name)
---                 else v
---         renameExpr c@(Con name) = c
---         renameExpr (e1 :$ e2) = renameExpr e1 :$ renameExpr e2
---         vars::[ String ]
---         vars = concatMap patVars pats
-
--- data Expr
---     = Var Name
---     | Con Name
---     | Expr :$ Expr deriving (Show)
--- data Pat = PVar Name | PApp Name [Pat] deriving (Show)
-
--- fitPat::DefMap -> Pat -> Expr -> (Expr,Maybe [(Name,Expr)])
 fitPat::Pat -> Expr -> Either (Maybe Path) Subst
 fitPat (PVar name) e = Right [(name,e)]
 fitPat p@(PApp name pats) e  = case toListWithPath e of
@@ -207,7 +158,6 @@ fitPat p@(PApp name pats) e  = case toListWithPath e of
 
 
 -- List of patterns is the same length as the list of expressions
--- fitPats::DefMap -> [Pat] -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
 fitPats::[Pat] -> [(Expr,Path)] -> Either (Maybe Path) Subst
 fitPats [] [] = Right []
 fitPats (p:ps) ((expr,path) : es) = 
@@ -221,18 +171,9 @@ fitPats (p:ps) ((expr,path) : es) =
             (Right subst2) -> Right $ subst ++subst2
 fitPats _ _ = error "Number of patterns differ from the number of expressions"
 
--- fitMatch::DefMap -> Match -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
--- fitMatch prog m es = fitPats prog (matchPats m) es
 fitMatch::Match -> [(Expr,Path)] -> Either (Maybe Path) Subst
 fitMatch m es = fitPats (matchPats m) es
 
--- data Match = Match
---     { matchName :: Name
---     , matchPats :: [Pat]
---     , matchRhs  ::Expr
---     } deriving (Show)
-
--- findMatch::DefMap -> [Match] -> [Expr] -> Maybe (Match,[(Name,Expr)])
 findMatch:: [Match] -> [(Expr,Path)] -> Either (Maybe Path) (Match,Subst)
 findMatch [] es = Left Nothing -- brak matchy
 findMatch (m:ms) es =  
@@ -245,7 +186,7 @@ findMatch (m:ms) es =
         else
             Left Nothing
 
--- outerStep:: Prog -> Expr -> Maybe Expr
+
 outerStep:: DefMap -> Expr -> Either (Maybe Path) Expr
 outerStep prog e = case toListWithPath e of
     ((Con _,_) : _ ) -> Left Nothing
@@ -257,9 +198,6 @@ outerStep prog e = case toListWithPath e of
                 (Left Nothing) -> Left Nothing
                 (Left (Just path)) -> Left (Just path)
                 (Right (m,subst)) -> Right $ substList subst (matchRhs m)
-                -- Nothing -> Nothing
-                -- (Just (m,ctx)) -> 
-                --     Just $ substList ctx (matchRhs m)
 
 rstep::DefMap -> Expr -> Either (Maybe Path) Expr
 rstep prog e = case outerStep prog e of
@@ -286,12 +224,6 @@ rstepAt prog (a :$ b) (R:ps) = case rstepAt prog b ps of
     (Left (Just path)) -> Left (Just (R:path))
     (Right expr) -> Right (a :$ expr)
 rstepAt _ expr path = error $ "rstepAt "++prettyExpr expr ++ " with path "++ show path
-
-
--- rpath:: DefMap -> Expr -> [Expr]
--- rpath prog e = e : case rstep prog e of
---     (Just e2) -> rpath prog e2
---     (Nothing) -> []
 
 rpath:: DefMap -> Expr -> Path -> [(Expr,Path)]
 rpath prog e path = case rstepAt prog e path of
