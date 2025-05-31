@@ -1,10 +1,12 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use second" #-}
 module Main where
 
 import System.Environment (getArgs)
 import Language.Haskell.Syntax
 import Language.Haskell.Parser
 import Data.List (intercalate,find)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, Maybe (Nothing))
 import Data.Map (Map)
 import qualified Data.Map as M
 
@@ -29,6 +31,12 @@ data Expr
     | Con Name
     | Expr :$ Expr deriving (Show)
 data Pat = PVar Name | PApp Name [Pat] deriving (Show)
+
+data Dir 
+    = L 
+    | R deriving (Show)
+
+type Path = [Dir]
 
 -- Parsing
 fromHsString :: String -> Prog
@@ -87,6 +95,18 @@ toList e = aux e []
         aux :: Expr -> [Expr]-> [Expr]
         aux (a :$ b) acc = aux a (b:acc) 
         aux c acc = c:acc
+
+toListWithPath :: Expr -> [(Expr,Path)]
+toListWithPath e = aux e [] [] 
+    where
+        aux :: Expr -> [(Expr,Path)] -> Path -> [(Expr,Path)]
+        aux (a :$ b) acc currentPath = aux a ((b,R:currentPath):acc) (L:currentPath)
+        aux c acc currentPath = map (\(e,path) -> (e,reverse path)) $ (c,currentPath):acc 
+        -- aux (a :$ b) acc currentPath = aux a ((b,currentPath++[R]):acc) (currentPath++[L])
+        -- aux c acc currentPath = (c,currentPath):acc 
+
+test_case_1 = toListWithPath (Con "A" :$ Var "arg1" :$ Var "arg2")
+-- test_case_1 = toListWithPath (Con "A" :$ Var "arg1" :$ Var "arg2")
 
 fromList :: [Expr] -> Expr
 fromList [] = error "Empty list"
@@ -168,108 +188,119 @@ substList sub (a :$ b) = substList sub a :$ substList sub b
 --         vars::[ String ]
 --         vars = concatMap patVars pats
 
-fitPat::DefMap -> Pat -> Expr -> (Expr,Maybe [(Name,Expr)])
-fitPat prog (PVar name) e = (e,Just [(name,e)])
--- fitPat prog _ _ = error "Patterns are not supported" 
-fitPat prog p@(PApp name pats) e  = case toList e of
-    (c@(Con constr) : es ) -> 
-        if name == constr
-            then 
-                if length pats == length es
-                    then 
-                        case fitPats prog pats es of
-                            (es2,Nothing) -> (fromList (c:es2),Nothing)
-                            (es2,Just ctx) -> (fromList (c:es2),Just ctx) 
-                    else 
-                        case rstep prog e of 
-                            (Nothing) -> (e,Nothing)
-                            (Just e2) -> fitPat prog p e2
-            else
-                (e,Nothing)
-    (v@(Var varname) : es) -> case rstep prog e of
-        (Nothing) -> (e,Nothing)
-        (Just e3) -> fitPat prog p e3 
+-- data Expr
+--     = Var Name
+--     | Con Name
+--     | Expr :$ Expr deriving (Show)
+-- data Pat = PVar Name | PApp Name [Pat] deriving (Show)
+
+-- fitPat::DefMap -> Pat -> Expr -> (Expr,Maybe [(Name,Expr)])
+fitPat::Pat -> Expr -> Either (Maybe Path) Subst
+fitPat (PVar name) e = Right [(name,e)]
+fitPat p@(PApp name pats) e  = case toListWithPath e of
+    ((Con s,_) : es ) -> 
+        if name == s && length es == length pats 
+            then fitPats pats es 
+            else Left Nothing
+    ((Var _,_) : _ ) -> Left (Just [])
     (_) -> error "Unexpected Expression"
 
 
 -- List of patterns is the same length as the list of expressions
-fitPats::DefMap -> [Pat] -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
-fitPats prog [] [] = ([],Just [])
-fitPats prog (p:ps) (e:es) = 
-    case fitPat prog p e of 
-        (e1,Nothing) -> (e1:es,Nothing)
-        (e1,Just ctx1) -> case fitPats prog ps es of
-            (es2,Nothing) -> (e1:es2,Nothing)
-            (es2,Just ctx2) -> (e1:es2,Just (ctx1++ctx2))
-fitPats _ _ _ = error "Number of patterns differ from the number of expressions"
+-- fitPats::DefMap -> [Pat] -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
+fitPats::[Pat] -> [(Expr,Path)] -> Either (Maybe Path) Subst
+fitPats [] [] = Right []
+fitPats (p:ps) ((expr,path) : es) = 
+    case fitPat p expr of 
+        (Left Nothing) -> Left Nothing
+        (Left (Just path2)) -> Left (Just (path++path2))
+        (Right subst) -> 
+            case fitPats ps es of
+            (Left Nothing) -> Left Nothing
+            (Left (Just path3)) -> Left (Just path3)
+            (Right subst2) -> Right $ subst ++subst2
+fitPats _ _ = error "Number of patterns differ from the number of expressions"
 
-fitMatch::DefMap -> Match -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
-fitMatch prog m es = fitPats prog (matchPats m) es
+-- fitMatch::DefMap -> Match -> [Expr] -> ([Expr],Maybe [(Name,Expr)])
+-- fitMatch prog m es = fitPats prog (matchPats m) es
+fitMatch::Match -> [(Expr,Path)] -> Either (Maybe Path) Subst
+fitMatch m es = fitPats (matchPats m) es
 
-findMatch::DefMap -> [Match] -> [Expr] -> Maybe (Match,[(Name,Expr)])
-findMatch prog [] es = Nothing
-findMatch prog (m:ms) es = 
+-- data Match = Match
+--     { matchName :: Name
+--     , matchPats :: [Pat]
+--     , matchRhs  ::Expr
+--     } deriving (Show)
+
+-- findMatch::DefMap -> [Match] -> [Expr] -> Maybe (Match,[(Name,Expr)])
+findMatch:: [Match] -> [(Expr,Path)] -> Either (Maybe Path) (Match,Subst)
+findMatch [] es = Left Nothing -- brak matchy
+findMatch (m:ms) es =  
     if length (matchPats m) == length es
         then 
-            case fitMatch prog m es of
-                (es2,Nothing) ->  findMatch prog ms es2
-                (es2,Just ctx) -> Just (m,ctx)
+            case fitMatch m es of
+                (Left Nothing) -> findMatch ms es
+                (Left (Just path)) -> Left (Just path)
+                (Right subst) -> Right (m,subst)
         else
-            Nothing
-
--- renameCtx::[(Name,Expr)] -> [(Name,Expr)]
--- renameCtx ctx = map (\(s,e) -> ((addPrefix s),e)) ctx 
+            Left Nothing
 
 -- outerStep:: Prog -> Expr -> Maybe Expr
-outerStep:: DefMap -> Expr -> Maybe Expr
-outerStep prog e = case toList e of
-    ((Con _) : _ ) -> Nothing
-    ((Var name) : es ) -> 
-            -- let allDefs = progDefs prog
-            -- def = find (any((name == ) .matchName).defMatches) allDefs 
+outerStep:: DefMap -> Expr -> Either (Maybe Path) Expr
+outerStep prog e = case toListWithPath e of
+    ((Con _,_) : _ ) -> Left Nothing
+    ((Var name,_) : es ) -> 
         let def = M.lookup name prog
         in case def of 
-            Nothing -> Nothing
-            (Just d) -> case findMatch prog (defMatches d) es of
-                Nothing -> Nothing
-                (Just (m,ctx)) -> 
-                    -- let m2 = renameMatch m 
-                    --     ctx2 = renameCtx ctx
-                    -- in 
-                    Just $ substList ctx (matchRhs m)
+            Nothing -> Left Nothing
+            (Just d) -> case findMatch (defMatches d) es of
+                (Left Nothing) -> Left Nothing
+                (Left (Just path)) -> Left (Just path)
+                (Right (m,subst)) -> Right $ substList subst (matchRhs m)
+                -- Nothing -> Nothing
+                -- (Just (m,ctx)) -> 
+                --     Just $ substList ctx (matchRhs m)
 
-
-rstep::DefMap -> Expr -> Maybe Expr
+rstep::DefMap -> Expr -> Either (Maybe Path) Expr
 rstep prog e = case outerStep prog e of
-    (Just e2) -> Just e2
-    (Nothing) -> case e of 
+    (Right e2) -> Right e2
+    (Left (Just path)) -> Left (Just path)
+    (Left Nothing) -> case e of 
         (a :$ b) -> case rstep prog a of
-            (Just a2) -> Just (a2 :$ b)
-            (Nothing) -> case rstep prog b of 
-                (Just b2) -> Just (a :$ b2)
-                (Nothing) -> Nothing
-        _ -> Nothing
+            (Right a2) -> Right (a2 :$ b)
+            (Left (Just path)) -> Left (Just (L:path))
+            (Left Nothing) -> case rstep prog b of 
+                (Right b2) -> Right (a :$ b2)
+                (Left (Just path2)) -> Left (Just (R:path2))
+                (Left Nothing) -> Left Nothing
+        _ -> Left Nothing
 
-rpath:: DefMap -> Expr -> [Expr]
-rpath prog e = e : case rstep prog e of
-    (Just e2) -> rpath prog e2
-    (Nothing) -> []
+rstepAt:: DefMap -> Expr -> Path -> Either (Maybe Path) Expr
+rstepAt prog e [] = rstep prog e
+rstepAt prog (a :$ b) (L:ps) = case rstepAt prog a ps of 
+    (Left Nothing) -> Left Nothing
+    (Left (Just path)) -> Left (Just (L:path))
+    (Right expr) -> Right (expr :$ b)
+rstepAt prog (a :$ b) (R:ps) = case rstepAt prog b ps of 
+    (Left Nothing) -> Left Nothing
+    (Left (Just path)) -> Left (Just (R:path))
+    (Right expr) -> Right (a :$ expr)
+rstepAt _ expr path = error $ "rstepAt "++prettyExpr expr ++ " with path "++ show path
 
+
+-- rpath:: DefMap -> Expr -> [Expr]
+-- rpath prog e = e : case rstep prog e of
+--     (Just e2) -> rpath prog e2
+--     (Nothing) -> []
+
+rpath:: DefMap -> Expr -> Path -> [(Expr,Path)]
+rpath prog e path = case rstepAt prog e path of
+    (Right expr) -> (expr,[]):rpath prog expr []
+    (Left Nothing) -> []
+    (Left (Just p)) -> rpath prog e p 
 
 printPath:: DefMap -> Expr ->  IO()
-printPath prog expr = mapM_ (putStrLn.prettyExpr) $ take 30 $ rpath prog expr
-
--- addPrefix::String -> String
--- addPrefix s = "#"++s
-
--- patVars::Pat -> [String]
--- patVars (PVar name) = [name]
--- patVars (PApp name pats) =  concatMap patVars pats
-
-
--- renamePat::Pat -> Pat
--- renamePat (PVar name) =  PVar (addPrefix name)
--- renamePat (PApp name pats) = PApp name (map renamePat pats)
+printPath prog expr = mapM_ (putStrLn.prettyExpr.fst) $ take 30 $ rpath prog expr []
 
 -- DEFMAP
 type DefMap = Map Name Def
